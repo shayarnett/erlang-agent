@@ -235,7 +235,7 @@ Compatible backends: [vLLM](https://docs.vllm.ai/), [llama.cpp server](https://g
 ### Inspiration
 
 - [pi-coding-agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/) — Mario Zechner's coding agent that inspired the TUI design, widget panels, and pet system
-- [pi-mono](https://github.com/nicholasgasior/pi-mono) — pi source code, reference for box grid rendering and event-driven TUI architecture
+- [pi-mono](https://github.com/badlogic/pi-mono) — pi source code, reference for box grid rendering and event-driven TUI architecture
 - [Mario Zechner's blog](https://mariozechner.at/) — ongoing posts about building pi and coding agents
 - [The Emperor Has No Clothes — 200 line coding agent](https://www.mihaileric.com/The-Emperor-Has-No-Clothes/) — the minimal agent pattern this project started from
 - [Building Effective Agents (Anthropic)](https://www.anthropic.com/engineering/building-effective-agents)
