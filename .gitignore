@@ -5,3 +5,4 @@ etui/ebin/*.beam
 *.dump
 erl_crash.dump
 /tmp/
+priv/ssh/
