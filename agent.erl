@@ -13,26 +13,19 @@
 -define(LLM_TEMPERATURE, 0.3).
 
 -define(SYSTEM_PROMPT, <<"You are a concise coding assistant on a bare-metal Erlang system.
-
-Tools (use one per response):
-- exec(command) — run a shell command
-- read_file(path) — read a file
-- write_file(path, content) — write a file
-- http_get(url) — HTTP GET
-- http_post(url, body) — HTTP POST
-- load_module(name, source) — compile and hot-load an Erlang module
-
-To call a tool: tool: name({\"key\": \"value\"})
-You will receive the result as tool_result(...). Continue or respond normally when done.
-Only use tools when the task requires them.">>).
+Only use tools when the task requires them.
+Available Erlang modules: agent, tools, json, theme, widgets, etui_panel.
+Loaded modules can call etui_panel:set(id, text) to show status in the TUI footer.">>).
 
 -record(state, {
     llm_url  = ?DEFAULT_LLM,
     model    = ?DEFAULT_MODEL,
+    api      = openai,      %% openai | anthropic (auto-detected from URL)
     system   = ?SYSTEM_PROMPT,
     history  = [],
     max_steps = ?MAX_STEPS,
-    on_tool  = undefined  %% optional callback: fun(Event, Data) for tool visibility
+    llm_opts = #{},         %% extra opts passed to llm:call (api_key, etc.)
+    on_tool  = undefined    %% optional callback: fun(Event, Data) for tool visibility
 }).
 
 %%--------------------------------------------------------------------
@@ -59,6 +52,12 @@ parse_cli_args(["--model", Model | Rest], Acc) ->
     parse_cli_args(Rest, Acc#{model => Model});
 parse_cli_args(["--system", System | Rest], Acc) ->
     parse_cli_args(Rest, Acc#{system => System});
+parse_cli_args(["--api", "anthropic" | Rest], Acc) ->
+    parse_cli_args(Rest, Acc#{api => anthropic});
+parse_cli_args(["--api", "openai" | Rest], Acc) ->
+    parse_cli_args(Rest, Acc#{api => openai});
+parse_cli_args(["--api-key", Key | Rest], Acc) ->
+    parse_cli_args(Rest, Acc#{api_key => Key});
 parse_cli_args(["--verbose" | Rest], Acc) ->
     parse_cli_args(Rest, Acc#{verbose => true});
 parse_cli_args([_ | Rest], Acc) ->
@@ -99,16 +98,24 @@ reload() ->
 init(Opts) ->
     inets:start(),
     ssl:start(),
+    Url = maps:get(llm_url, Opts, ?DEFAULT_LLM),
+    Api = maps:get(api, Opts, llm:detect_api(Url)),
+    LlmOpts = case maps:get(api_key, Opts, undefined) of
+        undefined -> #{};
+        Key -> #{api_key => Key}
+    end,
     State = #state{
-        llm_url   = maps:get(llm_url, Opts, ?DEFAULT_LLM),
+        llm_url   = Url,
         model     = maps:get(model, Opts, ?DEFAULT_MODEL),
+        api       = Api,
         system    = tools:to_bin(maps:get(system, Opts, ?SYSTEM_PROMPT)),
-        max_steps = maps:get(max_steps, Opts, ?MAX_STEPS)
+        max_steps = maps:get(max_steps, Opts, ?MAX_STEPS),
+        llm_opts  = LlmOpts
     },
     case maps:get(quiet, Opts, false) of
         true -> ok;
-        false -> io:format("agent: started (model=~s url=~s)~n",
-                           [State#state.model, State#state.llm_url])
+        false -> io:format("agent: started (model=~s url=~s api=~p)~n",
+                           [State#state.model, State#state.llm_url, Api])
     end,
     loop(State).
 
@@ -159,22 +166,45 @@ tool_loop(_State, _System, History, Step, MaxSteps, _OnTool) when Step >= MaxSte
     {{error, max_steps}, History};
 
 tool_loop(State, System, History, Step, MaxSteps, OnTool) ->
-    case llm_call(State, System, History) of
-        {ok, Reply} ->
-            case tools:parse_response(Reply) of
-                {tool, Name, Args} ->
+    Api = State#state.api,
+    Opts = (State#state.llm_opts)#{
+        api => Api,
+        max_tokens => ?LLM_MAX_TOKENS,
+        temperature => ?LLM_TEMPERATURE,
+        timeout => ?CHAT_TIMEOUT
+    },
+    case llm:call(State#state.llm_url, State#state.model, System, History, Opts) of
+        {ok, Msg} ->
+            Reply = llm:extract_content(Api, Msg),
+            case llm:extract_tool_calls(Api, Msg) of
+                [{Id, Name, Args} | _] ->
+                    %% Structured tool call from API
                     notify(OnTool, tool_call, {Name, Args}),
                     Result = tools:execute(Name, Args),
                     Truncated = tools:truncate(Result, 4000),
                     notify(OnTool, tool_result, {Name, Truncated}),
                     H2 = History ++ [
-                        #{role => assistant, content => Reply},
-                        #{role => user, content => <<"tool_result(", Truncated/binary, ")">>}
+                        llm:assistant_msg(Api, Msg),
+                        llm:tool_result_msg(Api, Id, Truncated)
                     ],
                     tool_loop(State, System, H2, Step + 1, MaxSteps, OnTool);
-                none ->
-                    H2 = History ++ [#{role => assistant, content => Reply}],
-                    {{ok, Reply}, H2}
+                [] ->
+                    %% No structured tool calls — try text-based fallback
+                    case tools:parse_response(Reply) of
+                        {tool, Name, Args} ->
+                            notify(OnTool, tool_call, {Name, Args}),
+                            Result = tools:execute(Name, Args),
+                            Truncated = tools:truncate(Result, 4000),
+                            notify(OnTool, tool_result, {Name, Truncated}),
+                            H2 = History ++ [
+                                #{role => assistant, content => Reply},
+                                #{role => user, content => <<"tool_result(", Truncated/binary, ")">>}
+                            ],
+                            tool_loop(State, System, H2, Step + 1, MaxSteps, OnTool);
+                        none ->
+                            H2 = History ++ [#{role => assistant, content => Reply}],
+                            {{ok, Reply}, H2}
+                    end
             end;
         {error, Reason} ->
             {{error, Reason}, History}
@@ -183,29 +213,3 @@ tool_loop(State, System, History, Step, MaxSteps, OnTool) ->
 notify(undefined, _, _) -> ok;
 notify(Fun, Event, Data) -> Fun(Event, Data).
 
-%%--------------------------------------------------------------------
-%% LLM HTTP call (OpenAI-compatible)
-%%--------------------------------------------------------------------
-
-llm_call(State, System, Messages) ->
-    Body = json:encode(#{
-        model => list_to_binary(State#state.model),
-        messages => [#{role => system, content => System} | Messages],
-        max_tokens => ?LLM_MAX_TOKENS,
-        temperature => ?LLM_TEMPERATURE,
-        chat_template_kwargs => #{enable_thinking => false}
-    }),
-    Request = {State#state.llm_url, [{"content-type", "application/json"}],
-               "application/json", Body},
-    case httpc:request(post, Request, [{timeout, ?CHAT_TIMEOUT}],
-                       [{body_format, binary}]) of
-        {ok, {{_, 200, _}, _, RespBody}} ->
-            Decoded = json:decode(RespBody),
-            [Choice | _] = maps:get(<<"choices">>, Decoded),
-            Msg = maps:get(<<"message">>, Choice),
-            {ok, maps:get(<<"content">>, Msg)};
-        {ok, {{_, Code, _}, _, RespBody}} ->
-            {error, {http, Code, RespBody}};
-        {error, Reason} ->
-            {error, Reason}
-    end.

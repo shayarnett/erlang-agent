@@ -1,5 +1,6 @@
 -module(tools).
 -export([execute/2, parse_response/1, parse_args/1]).
+-export([tool_definitions/0, parse_tool_calls/1]).
 -export([format_exports/1, format_diagnostics/1, run_tests/1]).
 -export([to_bin/1, truncate/2]).
 
@@ -33,6 +34,85 @@ parse_call(Call) ->
         nomatch ->
             none
     end.
+
+%%--------------------------------------------------------------------
+%% Structured tool calling (OpenAI function calling format)
+%%--------------------------------------------------------------------
+
+-spec tool_definitions() -> [map()].
+tool_definitions() ->
+    [
+        tool_def(<<"exec">>, <<"Run a shell command">>, #{
+            type => <<"object">>,
+            properties => #{
+                command => #{type => <<"string">>, description => <<"Shell command to execute">>}
+            },
+            required => [<<"command">>]
+        }),
+        tool_def(<<"read_file">>, <<"Read a file's contents">>, #{
+            type => <<"object">>,
+            properties => #{
+                path => #{type => <<"string">>, description => <<"File path to read">>}
+            },
+            required => [<<"path">>]
+        }),
+        tool_def(<<"write_file">>, <<"Write content to a file">>, #{
+            type => <<"object">>,
+            properties => #{
+                path => #{type => <<"string">>, description => <<"File path to write">>},
+                content => #{type => <<"string">>, description => <<"Content to write">>}
+            },
+            required => [<<"path">>, <<"content">>]
+        }),
+        tool_def(<<"http_get">>, <<"HTTP GET request">>, #{
+            type => <<"object">>,
+            properties => #{
+                url => #{type => <<"string">>, description => <<"URL to fetch">>}
+            },
+            required => [<<"url">>]
+        }),
+        tool_def(<<"http_post">>, <<"HTTP POST request">>, #{
+            type => <<"object">>,
+            properties => #{
+                url => #{type => <<"string">>, description => <<"URL to post to">>},
+                body => #{type => <<"string">>, description => <<"Request body">>}
+            },
+            required => [<<"url">>, <<"body">>]
+        }),
+        tool_def(<<"load_module">>, <<"Compile and hot-load an Erlang module">>, #{
+            type => <<"object">>,
+            properties => #{
+                name => #{type => <<"string">>, description => <<"Module name">>},
+                source => #{type => <<"string">>, description => <<"Erlang source code">>}
+            },
+            required => [<<"name">>, <<"source">>]
+        })
+    ].
+
+tool_def(Name, Desc, Params) ->
+    #{type => <<"function">>,
+      function => #{name => Name, description => Desc, parameters => Params}}.
+
+%% Parse structured tool_calls from an OpenAI-format message map.
+%% Returns [{Id, Name, Args}] or [] if no tool calls.
+-spec parse_tool_calls(map()) -> [{binary(), binary(), map()}].
+parse_tool_calls(Msg) when is_map(Msg) ->
+    case maps:get(<<"tool_calls">>, Msg, undefined) of
+        undefined -> [];
+        null -> [];
+        ToolCalls when is_list(ToolCalls) ->
+            lists:map(fun(TC) ->
+                Id = maps:get(<<"id">>, TC),
+                Fn = maps:get(<<"function">>, TC),
+                Name = maps:get(<<"name">>, Fn),
+                ArgsStr = maps:get(<<"arguments">>, Fn, <<"{}">>),
+                Args = try json:decode(to_bin(ArgsStr))
+                       catch _:_ -> #{<<"raw">> => to_bin(ArgsStr)}
+                       end,
+                {Id, Name, Args}
+            end, ToolCalls)
+    end;
+parse_tool_calls(_) -> [].
 
 %%--------------------------------------------------------------------
 %% Arg parsing: JSON object -> map, or CSV positional -> map
