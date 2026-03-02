@@ -4,7 +4,7 @@ EBIN = ebin
 SRCS = $(wildcard *.erl)
 BEAMS = $(patsubst %.erl,$(EBIN)/%.beam,$(SRCS))
 
-.PHONY: all clean shell agent tool
+.PHONY: all clean shell agent tool test
 
 all: $(BEAMS)
 
@@ -37,6 +37,16 @@ tool: all
 reload: all
 	$(ERL) -pa $(EBIN) -noshell -sname reloader -setcookie hackathon \
 		-eval 'net_kernel:connect_node(agent@$(shell hostname -s)), rpc:call(agent@$(shell hostname -s), agent, reload, []), halt().'
+
+# Run all tests
+test: all
+	@$(ERL) -noshell -pa $(EBIN) -pa etui/ebin -eval 'json_test:test(), halt().'
+	@echo "json_test: ok"
+	@$(ERL) -noshell -pa $(EBIN) -pa etui/ebin -eval 'tools_test:test(), halt().'
+	@echo "tools_test: ok"
+	@$(ERL) -noshell -pa $(EBIN) -pa etui/ebin -eval 'etui_text_test:test(), halt().'
+	@echo "etui_text_test: ok"
+	@echo "All tests passed."
 
 clean:
 	rm -rf $(EBIN) priv/ssh

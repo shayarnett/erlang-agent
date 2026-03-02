@@ -3,18 +3,19 @@
 
 %% Usage: erl -noshell -pa ebin -pa etui/ebin -run cli main
 
-%% ── Synthwave/Cyberpunk color palette ──────────────────────────
-%% 256-color codes (48;5;X for bg, 38;5;X for fg):
-%%   53  = deep magenta      (user message bg)
-%%   17  = deep navy         (exec tool bg)
-%%   54  = deep purple       (file tool bg)
-%%   90  = dark magenta      (load_module bg)
-%%   236 = dark grey         (footer bg, fallback tool bg)
-%%   51  = electric cyan     (header accent fg)
-%%   213 = hot pink          (user prompt chevron)
-%%   141 = lavender          (stats text)
-%%   87  = neon cyan-green   (success, /clear checkmark)
-%%   203 = neon red-pink     (errors)
+%% ── Synthwave/Cyberpunk color palette (256-color) ──────────────
+-define(C_CYAN,    "51").   %% electric cyan (header, accents)
+-define(C_PINK,    "213").  %% hot pink (prompt chevron, load_module)
+-define(C_MAGENTA, "53").   %% deep magenta (user message bg)
+-define(C_NAVY,    "17").   %% deep navy (exec tool bg)
+-define(C_PURPLE,  "54").   %% deep purple (file tool bg)
+-define(C_DMAGENTA,"90").   %% dark magenta (load_module bg)
+-define(C_GREY,    "236").  %% dark grey (footer bg, fallback)
+-define(C_LAVENDER,"141").  %% lavender (stats)
+-define(C_GREEN,   "87").   %% neon cyan-green (success)
+-define(C_RED,     "203").  %% neon red-pink (errors)
+-define(C_CMDOUT,  "117").  %% light blue (command output)
+-define(C_FILEOUT, "183").  %% light purple (file output)
 
 main() -> main([]).
 main(_Args) ->
@@ -55,16 +56,13 @@ render_header(Width, Model) ->
     io:put_chars([
         "\r\n",
         %% Title: electric cyan bold
-        "\e[1m\e[38;5;51m", "chat", "\e[39m\e[22m",
+        "\e[1m\e[38;5;" ?C_CYAN "m", "chat", "\e[39m\e[22m",
         %% Version: dim
         "\e[2m v0.1 \e[22m",
         %% Model: hot pink
-        "\e[38;5;213m(", Model, ")\e[39m",
+        "\e[38;5;" ?C_PINK "m(", Model, ")\e[39m",
         "\r\n",
         %% Keybinding hints: dim cyan
-        "\e[2m\e[38;5;51m",
-        "  ctrl+c quit  |  /clear reset\r\n",
-        "\e[39m\e[22m",
         "\r\n",
         %% Separator: cyan thin line
         cyan_line(Width),
@@ -82,21 +80,25 @@ chat_loop(Width) ->
             chat_loop(Width);
         {ok, "/quit"} ->
             clear_footer(Width),
-            io:put_chars(["\r\n\e[38;5;51m", "bye", "\e[39m\r\n"]);
+            io:put_chars(["\r\n\e[38;5;" ?C_CYAN "m", "bye", "\e[39m\r\n"]);
         {ok, "/clear"} ->
             agent ! clear_history,
-            io:put_chars(["\e[38;5;87m  \342\234\223 history cleared\e[39m\r\n\r\n"]),
+            %% Clear screen and re-render header
+            io:put_chars("\e[2J\e[H"),
+            Model = case get(model) of undefined -> "?"; M3 -> M3 end,
+            render_header(Width, Model),
+            io:put_chars(["\e[38;5;" ?C_GREEN "m  \342\234\223 history cleared\e[39m\r\n\r\n"]),
             chat_loop(Width);
         {ok, "/model"} ->
             Model = case get(model) of undefined -> "?"; M2 -> M2 end,
-            io:put_chars(["\e[38;5;51m  model: \e[39m", Model, "\r\n\r\n"]),
+            io:put_chars(["\e[38;5;" ?C_CYAN "m  model: \e[39m", Model, "\r\n\r\n"]),
             chat_loop(Width);
         {ok, "/help"} ->
             Cmds = slash_commands(),
             io:put_chars("\r\n"),
             lists:foreach(fun({Name, Desc}) ->
                 NamePad = lists:duplicate(max(1, 14 - length(Name)), $\s),
-                io:put_chars(["  \e[38;5;51m/", Name, "\e[39m",
+                io:put_chars(["  \e[38;5;" ?C_CYAN "m/", Name, "\e[39m",
                               NamePad, "\e[2m", Desc, "\e[22m\r\n"])
             end, Cmds),
             io:put_chars("\r\n"),
@@ -123,6 +125,7 @@ chat_loop(Width) ->
                 end,
                 SpinPid ! resume
             end,
+
             Result = agent:chat(Input, #{keep_history => true, on_tool => OnTool}),
             SpinPid ! stop,
             receive {spin_done, SpinRef} -> ok after 500 -> ok end,
@@ -134,14 +137,14 @@ chat_loop(Width) ->
                     render_assistant_reply(Reply, Width),
                     render_stats(Elapsed, Reply, Width);
                 {error, Reason} ->
-                    io:put_chars(["\e[38;5;203m  error: ",
+                    io:put_chars(["\e[38;5;" ?C_RED "m  error: ",
                                   io_lib:format("~p", [Reason]),
                                   "\e[39m\r\n\r\n"])
             end,
             chat_loop(Width);
         eof ->
             clear_footer(Width),
-            io:put_chars("\r\n")
+            io:put_chars(["\r\n\e[38;5;" ?C_CYAN "m", "bye", "\e[39m\r\n"])
     end.
 
 %%--------------------------------------------------------------------
@@ -151,7 +154,7 @@ chat_loop(Width) ->
 render_user_message(Input, Width) ->
     %% Deep magenta background — synthwave user bubble
     Padded = pad_to_width(["  ", Input], Width),
-    io:put_chars(["\e[48;5;53m\e[97m", Padded, "\e[39m\e[49m\r\n\r\n"]).
+    io:put_chars(["\e[48;5;" ?C_MAGENTA "m\e[97m", Padded, "\e[39m\e[49m\r\n\r\n"]).
 
 render_assistant_reply(Reply, Width) ->
     Lines = etui_md:render(binary_to_list(Reply), Width - 4),
@@ -164,37 +167,37 @@ render_assistant_reply(Reply, Width) ->
 render_tool_call(<<"exec">>, Args, Width) ->
     Cmd = tool_arg(Args, [<<"command">>, <<"cmd">>, <<"raw">>, <<"0">>]),
     %% Deep navy bg, bright cyan $ prefix
-    Header = pad_to_width(["  \e[38;5;51m\e[1m$ \e[22m", Cmd], Width),
-    io:put_chars(["\e[48;5;17m\e[97m", Header, "\e[39m\e[49m\r\n"]);
+    Header = pad_to_width(["  \e[38;5;" ?C_CYAN "m\e[1m$ \e[22m", Cmd], Width),
+    io:put_chars(["\e[48;5;" ?C_NAVY "m\e[97m", Header, "\e[39m\e[49m\r\n"]);
 
 render_tool_call(<<"read_file">>, Args, Width) ->
     Path = tool_arg(Args, [<<"path">>, <<"filename">>, <<"raw">>, <<"0">>]),
     Header = pad_to_width(["  \e[1mread\e[22m ", Path], Width),
-    io:put_chars(["\e[48;5;54m\e[97m", Header, "\e[39m\e[49m\r\n"]);
+    io:put_chars(["\e[48;5;" ?C_PURPLE "m\e[97m", Header, "\e[39m\e[49m\r\n"]);
 
 render_tool_call(<<"write_file">>, Args, Width) ->
     Path = tool_arg(Args, [<<"path">>, <<"raw">>, <<"0">>]),
     Header = pad_to_width(["  \e[1mwrite\e[22m ", Path], Width),
-    io:put_chars(["\e[48;5;54m\e[97m", Header, "\e[39m\e[49m\r\n"]);
+    io:put_chars(["\e[48;5;" ?C_PURPLE "m\e[97m", Header, "\e[39m\e[49m\r\n"]);
 
 render_tool_call(<<"load_module">>, Args, Width) ->
     Name = tool_arg(Args, [<<"module_name">>, <<"name">>, <<"0">>]),
     Header = pad_to_width(["  \e[1mload\e[22m ", Name], Width),
-    io:put_chars(["\e[48;5;90m\e[97m", Header, "\e[39m\e[49m\r\n"]);
+    io:put_chars(["\e[48;5;" ?C_DMAGENTA "m\e[97m", Header, "\e[39m\e[49m\r\n"]);
 
 render_tool_call(<<"http_get">>, Args, Width) ->
     Url = tool_arg(Args, [<<"url">>, <<"raw">>, <<"0">>]),
     Header = pad_to_width(["  \e[1mGET\e[22m ", truncate_bin(Url, Width - 10)], Width),
-    io:put_chars(["\e[48;5;54m\e[97m", Header, "\e[39m\e[49m\r\n"]);
+    io:put_chars(["\e[48;5;" ?C_PURPLE "m\e[97m", Header, "\e[39m\e[49m\r\n"]);
 
 render_tool_call(<<"http_post">>, Args, Width) ->
     Url = tool_arg(Args, [<<"url">>, <<"raw">>, <<"0">>]),
     Header = pad_to_width(["  \e[1mPOST\e[22m ", truncate_bin(Url, Width - 11)], Width),
-    io:put_chars(["\e[48;5;54m\e[97m", Header, "\e[39m\e[49m\r\n"]);
+    io:put_chars(["\e[48;5;" ?C_PURPLE "m\e[97m", Header, "\e[39m\e[49m\r\n"]);
 
 render_tool_call(Name, _Args, Width) ->
     Header = pad_to_width(["  \e[1m", Name, "\e[22m"], Width),
-    io:put_chars(["\e[48;5;236m\e[97m", Header, "\e[39m\e[49m\r\n"]).
+    io:put_chars(["\e[48;5;" ?C_GREY "m\e[97m", Header, "\e[39m\e[49m\r\n"]).
 
 %% ── Tool results ──
 
@@ -203,14 +206,14 @@ render_tool_result(<<"exec">>, Result, Width) ->
     Visible = lists:sublist([L || L <- Lines, L =/= <<>>], 5),
     lists:foreach(fun(L) ->
         Padded = pad_to_width(["  ", truncate_bin(L, Width - 4)], Width),
-        io:put_chars(["\e[48;5;17m\e[38;5;117m\e[2m", Padded, "\e[22m\e[39m\e[49m\r\n"])
+        io:put_chars(["\e[48;5;" ?C_NAVY "m\e[38;5;" ?C_CMDOUT "m\e[2m", Padded, "\e[22m\e[39m\e[49m\r\n"])
     end, Visible),
     case length(Lines) > 6 of
         true ->
             Hint = pad_to_width(
                 ["  \e[3m... (", integer_to_list(length(Lines) - 5), " more lines)\e[23m"],
                 Width),
-            io:put_chars(["\e[48;5;17m\e[38;5;117m\e[2m", Hint, "\e[22m\e[39m\e[49m\r\n"]);
+            io:put_chars(["\e[48;5;" ?C_NAVY "m\e[38;5;" ?C_CMDOUT "m\e[2m", Hint, "\e[22m\e[39m\e[49m\r\n"]);
         false -> ok
     end,
     io:put_chars("\r\n");
@@ -221,14 +224,14 @@ render_tool_result(<<"read_file">>, Result, Width) ->
     Visible = lists:sublist(Lines, 5),
     lists:foreach(fun(L) ->
         Padded = pad_to_width(["  ", truncate_bin(L, Width - 4)], Width),
-        io:put_chars(["\e[48;5;54m\e[38;5;183m\e[2m", Padded, "\e[22m\e[39m\e[49m\r\n"])
+        io:put_chars(["\e[48;5;" ?C_PURPLE "m\e[38;5;" ?C_FILEOUT "m\e[2m", Padded, "\e[22m\e[39m\e[49m\r\n"])
     end, Visible),
     case length(Lines) > 5 of
         true ->
             Hint = pad_to_width(
                 ["  \e[3m... (", integer_to_list(Sz), " bytes, ",
                  integer_to_list(length(Lines)), " lines)\e[23m"], Width),
-            io:put_chars(["\e[48;5;54m\e[38;5;183m\e[2m", Hint, "\e[22m\e[39m\e[49m\r\n"]);
+            io:put_chars(["\e[48;5;" ?C_PURPLE "m\e[38;5;" ?C_FILEOUT "m\e[2m", Hint, "\e[22m\e[39m\e[49m\r\n"]);
         false -> ok
     end,
     io:put_chars("\r\n");
@@ -238,7 +241,7 @@ render_tool_result(<<"load_module">>, Result, _Width) ->
     lists:foreach(fun(L) ->
         case L of
             <<>> -> ok;
-            _ -> io:put_chars(["\e[38;5;213m  ", L, "\e[39m\r\n"])
+            _ -> io:put_chars(["\e[38;5;" ?C_PINK "m  ", L, "\e[39m\r\n"])
         end
     end, Lines),
     io:put_chars("\r\n");
@@ -248,14 +251,14 @@ render_tool_result(_Name, Result, Width) ->
     Visible = lists:sublist([L || L <- Lines, L =/= <<>>], 3),
     lists:foreach(fun(L) ->
         Padded = pad_to_width(["  ", truncate_bin(L, Width - 4)], Width),
-        io:put_chars(["\e[48;5;236m\e[2m", Padded, "\e[22m\e[49m\r\n"])
+        io:put_chars(["\e[48;5;" ?C_GREY "m\e[2m", Padded, "\e[22m\e[49m\r\n"])
     end, Visible),
     io:put_chars("\r\n").
 
 render_stats(Elapsed, Reply, _Width) ->
     Bytes = byte_size(Reply),
     io:put_chars([
-        "\e[38;5;141m  ",
+        "\e[38;5;" ?C_LAVENDER "m  ",
         io_lib:format("~.1fs", [Elapsed]),
         "  ~",
         integer_to_list(Bytes div 4), " tokens",
@@ -274,10 +277,10 @@ render_footer(Width) ->
         "\e[s",
         %% Cyan accent line on row H-1
         "\e[", integer_to_list(H - 1), ";1H",
-        "\e[38;5;51m", lists:duplicate(Width, $-), "\e[39m",
+        "\e[38;5;" ?C_CYAN "m", lists:duplicate(Width, $-), "\e[39m",
         %% Footer bar on last row
         "\e[", integer_to_list(H), ";1H",
-        "\e[48;5;236m\e[38;5;51m",
+        "\e[48;5;" ?C_GREY "m\e[38;5;" ?C_CYAN "m",
         Left, Padding, Right,
         "\e[39m\e[49m",
         "\e[u"
@@ -308,7 +311,7 @@ slash_commands() ->
 
 read_input(Width) ->
     %% Hot pink prompt chevron
-    State = etui_input:new("\e[38;5;213m>\e[39m "),
+    State = etui_input:new("\e[38;5;" ?C_PINK "m>\e[39m "),
     render_input(State, Width),
     input_loop(State, Width, 0).
 
@@ -333,11 +336,7 @@ input_loop(State, Width, MenuLines) ->
             io:put_chars("\r\n"),
             {ok, ""};
         {ignore, _} ->
-            case Key of
-                {key, c, [ctrl]} -> clear_menu(MenuLines), eof;
-                {key, d, [ctrl]} -> clear_menu(MenuLines), eof;
-                _ -> input_loop(State, Width, MenuLines)
-            end
+            input_loop(State, Width, MenuLines)
     end.
 
 render_input(State, Width) ->
@@ -369,11 +368,11 @@ render_menu(Matches, Width) ->
         %% Move down one line
         io:put_chars("\e[B\r\e[2K"),
         Indicator = case Idx of
-            0 -> "\e[38;5;51m-> \e[39m";
+            0 -> "\e[38;5;" ?C_CYAN "m-> \e[39m";
             _ -> "   "
         end,
         NamePad = lists:duplicate(max(1, 14 - length(Name)), $\s),
-        Line = [Indicator, "\e[38;5;51m", Name, "\e[39m",
+        Line = [Indicator, "\e[38;5;" ?C_CYAN "m", Name, "\e[39m",
                 NamePad, "\e[2m", Desc, "\e[22m"],
         Padded = pad_to_width(Line, Width),
         io:put_chars(Padded)
@@ -433,7 +432,7 @@ skip_csi(<<_, Rest/binary>>, N) ->
 
 %% Cyan separator line
 cyan_line(Width) ->
-    ["\e[38;5;51m", lists:duplicate(Width, $-), "\e[39m"].
+    ["\e[38;5;" ?C_CYAN "m", lists:duplicate(Width, $-), "\e[39m"].
 
 tilde(Path) ->
     Home = os:getenv("HOME"),
@@ -458,7 +457,7 @@ spin_loop(Msg, Idx, Parent, Ref) ->
               <<226,160,135>>,<<226,160,143>>],
     Frame = lists:nth((Idx rem length(Frames)) + 1, Frames),
     %% Cyan spinner
-    io:put_chars(["\e[2K\r  \e[38;5;51m", Frame, "\e[39m \e[2m", Msg, "\e[22m"]),
+    io:put_chars(["\e[2K\r  \e[38;5;" ?C_CYAN "m", Frame, "\e[39m \e[2m", Msg, "\e[22m"]),
     receive
         stop -> Parent ! {spin_done, Ref};
         pause ->

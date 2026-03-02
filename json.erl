@@ -8,6 +8,7 @@
 %% Encode
 %%--------------------------------------------------------------------
 
+-spec encode(term()) -> binary().
 encode(Map) when is_map(Map) ->
     Pairs = maps:to_list(Map),
     Inner = lists:join(",", [encode_pair(K, V) || {K, V} <- Pairs]),
@@ -40,6 +41,7 @@ encode_pair(K, V) ->
 %% Decode
 %%--------------------------------------------------------------------
 
+-spec decode(binary()) -> term().
 decode(Bin) when is_binary(Bin) ->
     {Value, _Rest} = decode_value(skip_ws(Bin)),
     Value.
@@ -108,11 +110,31 @@ decode_number(<<C, Rest/binary>>, Acc) when C >= $0, C =< $9; C =:= $-; C =:= $+
     decode_number(Rest, [C | Acc]);
 decode_number(Rest, Acc) ->
     Str = lists:reverse(Acc),
-    Num = case lists:member($., Str) orelse lists:member($e, Str) orelse lists:member($E, Str) of
-        true -> list_to_float(Str);
-        false -> list_to_integer(Str)
+    HasDot = lists:member($., Str),
+    HasExp = lists:member($e, Str) orelse lists:member($E, Str),
+    Num = try
+        case HasDot orelse HasExp of
+            true ->
+                %% Erlang requires a decimal point for list_to_float;
+                %% JSON allows "1e2" without one — normalize by inserting ".0"
+                FloatStr = case HasDot of
+                    true -> Str;
+                    false -> insert_dot(Str)
+                end,
+                list_to_float(FloatStr);
+            false ->
+                list_to_integer(Str)
+        end
+    catch
+        error:badarg -> error({json_number, Str})
     end,
     {Num, Rest}.
+
+%% Insert ".0" before 'e'/'E' for Erlang's list_to_float (e.g. "1e2" -> "1.0e2")
+insert_dot([]) -> [];
+insert_dot([$e | Rest]) -> ".0e" ++ Rest;
+insert_dot([$E | Rest]) -> ".0E" ++ Rest;
+insert_dot([C | Rest]) -> [C | insert_dot(Rest)].
 
 %%--------------------------------------------------------------------
 %% Helpers
