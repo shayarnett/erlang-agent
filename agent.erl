@@ -8,8 +8,8 @@
 -define(DEFAULT_MODEL, "glm-4.7-flash").
 -define(CHAT_TIMEOUT, 120000).
 -define(TOOL_TIMEOUT, 30000).
--define(MAX_STEPS, 10).
--define(LLM_MAX_TOKENS, 2048).
+-define(MAX_STEPS, 30).
+-define(LLM_MAX_TOKENS, 4096).
 -define(LLM_TEMPERATURE, 0.3).
 
 -define(SYSTEM_PROMPT, <<"You are a concise coding assistant on a bare-metal Erlang system.

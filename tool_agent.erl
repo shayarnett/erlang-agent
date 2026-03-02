@@ -10,8 +10,8 @@
 
 -define(DEFAULT_LLM, "http://spark.local:8000/v1/chat/completions").
 -define(DEFAULT_MODEL, "glm-4.7-flash").
--define(MAX_STEPS, 10).
--define(LLM_MAX_TOKENS, 2048).
+-define(MAX_STEPS, 30).
+-define(LLM_MAX_TOKENS, 4096).
 -define(LLM_TEMPERATURE, 0.3).
 
 -define(TOOL_SYSTEM, <<"You are a systems agent on a bare-metal Erlang machine.

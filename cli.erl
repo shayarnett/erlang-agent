@@ -52,6 +52,8 @@ parse_cli_args(["--api", "openai" | Rest], Acc) ->
     parse_cli_args(Rest, Acc#{api => openai});
 parse_cli_args(["--api-key", Key | Rest], Acc) ->
     parse_cli_args(Rest, Acc#{api_key => Key});
+parse_cli_args(["--max-steps", N | Rest], Acc) ->
+    parse_cli_args(Rest, Acc#{max_steps => list_to_integer(N)});
 parse_cli_args([_ | Rest], Acc) ->
     parse_cli_args(Rest, Acc).
 
@@ -185,6 +187,10 @@ event_loop(InputState, Width, Mode, MenuLines) ->
                 {ok, Reply} ->
                     render_assistant_reply(Reply, Width),
                     render_stats(Elapsed, Reply, Width);
+                {error, max_steps} ->
+                    io:put_chars([theme:fg(error),
+                                  "  hit max steps limit (increase with --max-steps N)",
+                                  "\e[39m\r\n\r\n"]);
                 {error, Reason} ->
                     io:put_chars([theme:fg(error), "  error: ",
                                   io_lib:format("~p", [Reason]),
