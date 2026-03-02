@@ -32,7 +32,10 @@ fi
 
 if [[ "$SANDBOX" -eq 1 ]]; then
     echo "sandbox: on"
-    exec sandbox-exec -f "$DIR/sandbox.sb" "${ERL_CMD[@]}"
+    exec sandbox-exec -f "$DIR/sandbox.sb" \
+        -D "PROJECT_DIR=$DIR" \
+        -D "HOME_DIR=$HOME" \
+        "${ERL_CMD[@]}"
 else
     echo "sandbox: off"
     exec "${ERL_CMD[@]}"

@@ -2,6 +2,10 @@
 
 ;; Synthwave agent sandbox — restrict the LLM's tool access
 ;; The agent can read most things but only write to its own workspace + /tmp
+;;
+;; Parameters (passed via sandbox-exec -D):
+;;   PROJECT_DIR — absolute path to the project directory
+;;   HOME_DIR    — user's home directory
 
 ;; Start with deny-all
 (deny default)
@@ -37,7 +41,7 @@
 ;; ── Write access (restricted to workspace + tmp) ──
 ;; Project directory — agent can write files here
 (allow file-write*
-    (subpath "/Users/shay/Projects/pi-mono/packages/homie/erlang-agent"))
+    (subpath (param "PROJECT_DIR")))
 
 ;; Temp files — Erlang runtime needs these
 (allow file-write*
@@ -47,15 +51,15 @@
 
 ;; Home dotfiles the runtime might touch
 (allow file-write*
-    (subpath "/Users/shay/.erlang.cookie")
-    (subpath "/Users/shay/.cache"))
+    (subpath (string-append (param "HOME_DIR") "/.erlang.cookie"))
+    (subpath (string-append (param "HOME_DIR") "/.cache")))
 
 ;; ── Deny writes to dangerous places (explicit, for clarity) ──
 ;; These are already denied by default, but being explicit
 (deny file-write*
-    (subpath "/Users/shay/.ssh")
-    (subpath "/Users/shay/.gnupg")
-    (subpath "/Users/shay/.aws")
+    (subpath (string-append (param "HOME_DIR") "/.ssh"))
+    (subpath (string-append (param "HOME_DIR") "/.gnupg"))
+    (subpath (string-append (param "HOME_DIR") "/.aws"))
     (subpath "/etc")
     (subpath "/usr")
     (subpath "/System"))
