@@ -87,6 +87,20 @@ chat_loop(Width) ->
             agent ! clear_history,
             io:put_chars(["\e[38;5;87m  \342\234\223 history cleared\e[39m\r\n\r\n"]),
             chat_loop(Width);
+        {ok, "/model"} ->
+            Model = case get(model) of undefined -> "?"; M2 -> M2 end,
+            io:put_chars(["\e[38;5;51m  model: \e[39m", Model, "\r\n\r\n"]),
+            chat_loop(Width);
+        {ok, "/help"} ->
+            Cmds = slash_commands(),
+            io:put_chars("\r\n"),
+            lists:foreach(fun({Name, Desc}) ->
+                NamePad = lists:duplicate(max(1, 14 - length(Name)), $\s),
+                io:put_chars(["  \e[38;5;51m/", Name, "\e[39m",
+                              NamePad, "\e[2m", Desc, "\e[22m\r\n"])
+            end, Cmds),
+            io:put_chars("\r\n"),
+            chat_loop(Width);
         {ok, Input} ->
             clear_footer(Width),
             render_user_message(Input, Width),
@@ -279,6 +293,16 @@ clear_footer(_Width) ->
     ]).
 
 %%--------------------------------------------------------------------
+%% Slash commands
+%%--------------------------------------------------------------------
+
+slash_commands() ->
+    [{"clear",  "Reset conversation history"},
+     {"quit",   "Exit the chat"},
+     {"model",  "Show current model"},
+     {"help",   "Show available commands"}].
+
+%%--------------------------------------------------------------------
 %% Input
 %%--------------------------------------------------------------------
 
@@ -286,31 +310,87 @@ read_input(Width) ->
     %% Hot pink prompt chevron
     State = etui_input:new("\e[38;5;213m>\e[39m "),
     render_input(State, Width),
-    input_loop(State, Width).
+    input_loop(State, Width, 0).
 
-input_loop(State, Width) ->
+input_loop(State, Width, MenuLines) ->
     Chars = io:get_chars("", 1024),
     Key = etui_keys:parse(Chars),
     case etui_input:handle_key(Key, State) of
         {submit, Value} ->
+            clear_menu(MenuLines),
             io:put_chars("\r\n"),
             {ok, string:trim(Value)};
         {updated, NewState} ->
+            %% Synchronized output: buffer everything, display atomically
+            io:put_chars("\e[?2026h"),
+            clear_menu(MenuLines),
             render_input(NewState, Width),
-            input_loop(NewState, Width);
+            NewMenuLines = maybe_show_menu(NewState, Width),
+            io:put_chars("\e[?2026l"),
+            input_loop(NewState, Width, NewMenuLines);
         {escape, _} ->
+            clear_menu(MenuLines),
             io:put_chars("\r\n"),
             {ok, ""};
         {ignore, _} ->
             case Key of
-                {key, c, [ctrl]} -> eof;
-                {key, d, [ctrl]} -> eof;
-                _ -> input_loop(State, Width)
+                {key, c, [ctrl]} -> clear_menu(MenuLines), eof;
+                {key, d, [ctrl]} -> clear_menu(MenuLines), eof;
+                _ -> input_loop(State, Width, MenuLines)
             end
     end.
 
 render_input(State, Width) ->
     io:put_chars(["\r", etui_input:render(State, Width)]).
+
+%% Show slash menu if input starts with "/"
+maybe_show_menu(State, Width) ->
+    Value = etui_input:get_value(State),
+    case Value of
+        "/" ++ Rest ->
+            Prefix = string:lowercase(Rest),
+            All = slash_commands(),
+            Matches = [Cmd || {Name, _} = Cmd <- All,
+                        Prefix =:= "" orelse
+                        lists:prefix(Prefix, Name)],
+            render_menu(Matches, Width);
+        _ ->
+            0
+    end.
+
+render_menu([], _Width) -> 0;
+render_menu(Matches, Width) ->
+    N = length(Matches),
+    %% Ensure terminal has room below cursor: push N blank lines then come back
+    io:put_chars(lists:duplicate(N, $\n)),
+    io:put_chars(["\e[", integer_to_list(N), "A"]),
+    %% Now render each menu line using down movement (no scrolling)
+    lists:foreach(fun({Idx, {Name, Desc}}) ->
+        %% Move down one line
+        io:put_chars("\e[B\r\e[2K"),
+        Indicator = case Idx of
+            0 -> "\e[38;5;51m-> \e[39m";
+            _ -> "   "
+        end,
+        NamePad = lists:duplicate(max(1, 14 - length(Name)), $\s),
+        Line = [Indicator, "\e[38;5;51m", Name, "\e[39m",
+                NamePad, "\e[2m", Desc, "\e[22m"],
+        Padded = pad_to_width(Line, Width),
+        io:put_chars(Padded)
+    end, lists:zip(lists:seq(0, N - 1), Matches)),
+    %% Move cursor back up to input line
+    io:put_chars(["\e[", integer_to_list(N), "A\r"]),
+    %% Re-render input so cursor is in right spot
+    N.
+
+%% Clear N lines below the current cursor position
+clear_menu(0) -> ok;
+clear_menu(N) ->
+    %% Move down, clear each line, move back up
+    lists:foreach(fun(_) ->
+        io:put_chars("\e[B\r\e[2K")
+    end, lists:seq(1, N)),
+    io:put_chars(["\e[", integer_to_list(N), "A\r"]).
 
 %%--------------------------------------------------------------------
 %% Helpers
