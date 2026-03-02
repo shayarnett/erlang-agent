@@ -1,0 +1,61 @@
+(version 1)
+
+;; Synthwave agent sandbox — restrict the LLM's tool access
+;; The agent can read most things but only write to its own workspace + /tmp
+
+;; Start with deny-all
+(deny default)
+
+;; ── Process basics ──
+(allow process-exec)
+(allow process-fork)
+(allow signal)
+(allow sysctl-read)
+(allow mach-lookup)
+(allow mach-register)
+(allow ipc-posix-shm-read-data)
+(allow ipc-posix-shm-write-data)
+(allow ipc-posix-shm-read-metadata)
+(allow ipc-posix-shm-write-create)
+(allow system-socket)
+(allow iokit-open)
+(allow pseudo-tty)
+
+;; ── TTY / terminal device access (Erlang user process needs this) ──
+(allow file-read* file-write* file-ioctl
+    (subpath "/dev"))
+
+;; ── Network (LLM API + http_get/http_post tools) ──
+(allow network-outbound)
+(allow network-inbound (local ip "localhost:*"))
+(allow network-bind)
+(allow system-socket)
+
+;; ── Read access (broad — agent needs to read files for context) ──
+(allow file-read*)
+
+;; ── Write access (restricted to workspace + tmp) ──
+;; Project directory — agent can write files here
+(allow file-write*
+    (subpath "/Users/shay/Projects/pi-mono/packages/homie/erlang-agent"))
+
+;; Temp files — Erlang runtime needs these
+(allow file-write*
+    (subpath "/tmp")
+    (subpath "/private/tmp")
+    (subpath "/var/folders"))
+
+;; Home dotfiles the runtime might touch
+(allow file-write*
+    (subpath "/Users/shay/.erlang.cookie")
+    (subpath "/Users/shay/.cache"))
+
+;; ── Deny writes to dangerous places (explicit, for clarity) ──
+;; These are already denied by default, but being explicit
+(deny file-write*
+    (subpath "/Users/shay/.ssh")
+    (subpath "/Users/shay/.gnupg")
+    (subpath "/Users/shay/.aws")
+    (subpath "/etc")
+    (subpath "/usr")
+    (subpath "/System"))

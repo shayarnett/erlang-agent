@@ -1,0 +1,7 @@
+ebin/*.beam
+ebin/*.erl
+etui/ebin/*.beam
+*.beam
+*.dump
+erl_crash.dump
+/tmp/

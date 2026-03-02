@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$DIR"
+
+# ── Build ──
+echo "building..."
+make -C etui all -s 2>&1
+make all -s 2>&1
+echo "ok"
+
+# ── Args ──
+SANDBOX=1
+ERL_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-sandbox) SANDBOX=0; shift ;;
+        *)            ERL_ARGS+=("$1"); shift ;;
+    esac
+done
+
+# ── Launch ──
+ERL_CMD=(
+    erl -noshell +Bi
+    -pa ebin -pa etui/ebin
+    -run cli main
+)
+if [[ ${#ERL_ARGS[@]} -gt 0 ]]; then
+    ERL_CMD+=(-- "${ERL_ARGS[@]}")
+fi
+
+if [[ "$SANDBOX" -eq 1 ]]; then
+    echo "sandbox: on"
+    exec sandbox-exec -f "$DIR/sandbox.sb" "${ERL_CMD[@]}"
+else
+    echo "sandbox: off"
+    exec "${ERL_CMD[@]}"
+fi

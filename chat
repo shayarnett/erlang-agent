@@ -1,0 +1,181 @@
+#!/usr/bin/env escript
+%%! -noshell +Bi -pa etui/ebin
+
+main(Args) ->
+    Opts = parse_args(Args, #{}),
+    inets:start(),
+    ssl:start(),
+    agent:start(Opts#{quiet => true}),
+
+    Width = tty_width(),
+    OldStty = string:trim(os:cmd("stty -g < /dev/tty")),
+    os:cmd("stty raw -echo -isig < /dev/tty"),
+
+    %% Spawn a helper that reads from /dev/tty with its own fd
+    Dir = filename:dirname(escript:script_name()),
+    Port = erlang:open_port({spawn, Dir ++ "/tty_reader.sh"}, [binary, eof, use_stdio, exit_status]),
+    %% Write to /dev/tty directly
+    {ok, Wr} = file:open("/dev/tty", [write, raw, binary]),
+
+    tty_w(Wr, [
+        "\e[1mchat\e[22m",
+        "\e[2m (Ctrl+C to quit)\e[22m",
+        "\r\n\r\n"
+    ]),
+    try
+        chat_loop(Port, Wr, Width)
+    after
+        catch erlang:port_close(Port),
+        file:close(Wr),
+        os:cmd("stty " ++ OldStty ++ " < /dev/tty")
+    end,
+    agent:stop().
+
+parse_args([], Acc) -> Acc;
+parse_args(["--url", Url | Rest], Acc) ->
+    parse_args(Rest, Acc#{llm_url => Url});
+parse_args(["--model", Model | Rest], Acc) ->
+    parse_args(Rest, Acc#{model => Model});
+parse_args(["--system", System | Rest], Acc) ->
+    parse_args(Rest, Acc#{system => System});
+parse_args([_ | Rest], Acc) ->
+    parse_args(Rest, Acc).
+
+tty_width() ->
+    case os:cmd("tput cols 2>/dev/null") of
+        "" -> 80;
+        S ->
+            case string:to_integer(string:trim(S)) of
+                {N, _} when is_integer(N), N > 0 -> N;
+                _ -> 80
+            end
+    end.
+
+chat_loop(Port, Wr, Width) ->
+    case read_input(Port, Wr, Width) of
+        {ok, ""} ->
+            chat_loop(Port, Wr, Width);
+        {ok, "/quit"} ->
+            tty_w(Wr, "\r\nbye\r\n");
+        {ok, "/clear"} ->
+            agent ! clear_history,
+            tty_w(Wr, ["\e[2m  history cleared\e[22m\r\n\r\n"]),
+            chat_loop(Port, Wr, Width);
+        {ok, "/tool " ++ Goal} ->
+            run_tool(Port, Wr, Goal, Width),
+            chat_loop(Port, Wr, Width);
+        {ok, Input} ->
+            Self = self(),
+            SpinPid = spawn_link(fun() -> spin_loop(Wr, "thinking...", 0, Self) end),
+            Result = agent:chat(Input, #{keep_history => true}),
+            SpinPid ! stop,
+            receive spin_done -> ok after 500 -> ok end,
+            tty_w(Wr, "\e[2K\r"),
+            case Result of
+                {ok, Reply} ->
+                    Lines = etui_md:render(binary_to_list(Reply), Width - 4),
+                    tty_w(Wr, "\r\n"),
+                    lists:foreach(fun(L) -> tty_w(Wr, ["  ", L, "\r\n"]) end, Lines),
+                    tty_w(Wr, "\r\n");
+                {error, Reason} ->
+                    tty_w(Wr, ["\e[31m  error: ", io_lib:format("~p", [Reason]), "\e[39m\r\n\r\n"])
+            end,
+            chat_loop(Port, Wr, Width);
+        eof ->
+            tty_w(Wr, "\r\n")
+    end.
+
+read_input(Port, Wr, Width) ->
+    State = etui_input:new("> "),
+    render_input(Wr, State, Width),
+    input_loop(Port, Wr, State, Width).
+
+input_loop(Port, Wr, State, Width) ->
+    Data = port_read(Port),
+    case Data of
+        eof -> eof;
+        Bytes ->
+            Key = etui_keys:parse(Bytes),
+            case etui_input:handle_key(Key, State) of
+                {submit, Value} ->
+                    tty_w(Wr, "\r\n"),
+                    {ok, string:trim(Value)};
+                {updated, NewState} ->
+                    render_input(Wr, NewState, Width),
+                    input_loop(Port, Wr, NewState, Width);
+                {escape, _} ->
+                    tty_w(Wr, "\r\n"),
+                    {ok, ""};
+                {ignore, _} ->
+                    case Key of
+                        {key, c, [ctrl]} -> eof;
+                        {key, d, [ctrl]} -> eof;
+                        _ -> input_loop(Port, Wr, State, Width)
+                    end
+            end
+    end.
+
+port_read(Port) ->
+    receive
+        {Port, {data, Data}} ->
+            collect_port(Port, Data);
+        {Port, eof} ->
+            eof;
+        {Port, {exit_status, _}} ->
+            eof
+    end.
+
+collect_port(Port, Acc) ->
+    receive
+        {Port, {data, More}} ->
+            collect_port(Port, <<Acc/binary, More/binary>>)
+    after 0 ->
+        Acc
+    end.
+
+render_input(Wr, State, Width) ->
+    Line = etui_input:render(State, Width),
+    tty_w(Wr, ["\r", Line]).
+
+run_tool(_Port, Wr, Goal, Width) ->
+    tty_w(Wr, ["\e[2m  /tool: ", Goal, "\e[22m\r\n"]),
+    OnStep = fun(Type, Data) ->
+        case Type of
+            step ->
+                tty_w(Wr, ["\r\n\e[2m  --- step ", integer_to_list(Data), " ---\e[22m\r\n"]);
+            llm ->
+                Lines = etui_md:render(binary_to_list(Data), Width - 4),
+                lists:foreach(fun(L) -> tty_w(Wr, ["  ", L, "\r\n"]) end, Lines);
+            tool ->
+                tty_w(Wr, ["\e[33m  > ", Data, "\e[39m\r\n"]);
+            result ->
+                Trunc = case byte_size(Data) > 500 of
+                    true -> <<(binary:part(Data, 0, 500))/binary, "\n...">>;
+                    false -> Data
+                end,
+                tty_w(Wr, ["\e[2m  ", Trunc, "\e[22m\r\n"]);
+            done ->
+                tty_w(Wr, ["\e[32m  done\e[39m\r\n\r\n"]);
+            max_steps ->
+                tty_w(Wr, ["\e[31m  max steps reached\e[39m\r\n\r\n"]);
+            error ->
+                tty_w(Wr, ["\e[31m  error: ", io_lib:format("~p", [Data]), "\e[39m\r\n\r\n"])
+        end
+    end,
+    tool_agent:run(Goal, #{on_step => OnStep}).
+
+spin_loop(Wr, Msg, Idx, Parent) ->
+    Frames = [<<226,160,139>>,<<226,160,153>>,<<226,160,185>>,<<226,160,184>>,
+              <<226,160,188>>,<<226,160,180>>,<<226,160,166>>,<<226,160,167>>,
+              <<226,160,135>>,<<226,160,143>>],
+    Frame = lists:nth((Idx rem length(Frames)) + 1, Frames),
+    tty_w(Wr, ["\e[2K\r", Frame, " ", Msg]),
+    receive
+        stop -> Parent ! spin_done
+    after 80 ->
+        spin_loop(Wr, Msg, Idx + 1, Parent)
+    end.
+
+tty_w(Wr, Data) ->
+    Bin = unicode:characters_to_binary(lists:flatten(Data)),
+    file:write(Wr, Bin).
